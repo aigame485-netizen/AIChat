@@ -1,0 +1,7 @@
+# Claude Code 用の指示書（非公開）
+作業指示書.md
+
+# その他
+*.zip
+Thumbs.db
+.DS_Store

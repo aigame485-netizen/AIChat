@@ -39,8 +39,28 @@
   <button id="copy" type="button">コピー</button>
   <div class="msg" id="msg"></div>
 </main>
-<script type="module">
-  import { encryptText, decryptText } from './js/crypto.js?v=20261011';
+<script>
+  // ダブルクリック（file://）でも動くよう、js/crypto.js と同じ処理をここに直接持つ
+  // 形式を変える時は js/crypto.js と両方直すこと
+  const toB64 = (buf) => { let s = ''; const b = new Uint8Array(buf); for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s); };
+  const fromB64 = (t) => Uint8Array.from(atob(t), (c) => c.charCodeAt(0));
+  async function deriveKey(passphrase, salt) {
+    const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+      material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  }
+  async function encryptText(plain, passphrase) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await deriveKey(passphrase, salt);
+    const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(plain));
+    return ['v1', toB64(salt), toB64(iv), toB64(data)].join('.');
+  }
+  async function decryptText(cipher, passphrase) {
+    const p = cipher.split('.');
+    const key = await deriveKey(passphrase, fromB64(p[1]));
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(p[2]) }, key, fromB64(p[3])));
+  }
   const $ = (id) => document.getElementById(id);
   $('f').onsubmit = async (e) => {
     e.preventDefault();

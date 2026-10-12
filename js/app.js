@@ -171,7 +171,9 @@ function fillAssistant(el, content, streaming, meta = {}) {
   if (!streaming) {
     if (meta.stop === 'max_tokens') html += '<div class="note">長くなりすぎたため、途中で終わっています。</div>';
     if (meta.aborted) html += '<div class="note">中断しました。</div>';
-    html += `<div class="msg-actions"><button data-act="copy" aria-label="コピー"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>`;
+    html += `<div class="msg-actions"><button data-act="copy" aria-label="コピー"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>`;
+    if (meta.role === 'assistant') html += `<button data-act="branch" aria-label="ここから分岐"><svg viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="7" r="2"/><path d="M6 7v10M18 9c0 5-12 3-12 8"/></svg></button>`;
+    html += '</div>';
   }
   el.innerHTML = html;
   const copyBtn = el.querySelector('[data-act="copy"]');
@@ -181,6 +183,33 @@ function fillAssistant(el, content, streaming, meta = {}) {
       navigator.clipboard.writeText(all).then(() => toast('コピーしました'));
     };
   }
+  const branchBtn = el.querySelector('[data-act="branch"]');
+  if (branchBtn) branchBtn.onclick = () => branchFrom(meta);
+}
+
+// この回答までのやりとりを写した新しい会話を作る。元の会話はそのまま残る
+async function branchFrom(m) {
+  if (busy || !current) return;
+  const i = current.messages.indexOf(m);
+  if (i < 0) return;
+  const r = await dialog({ message: 'ここまでの会話をコピーして、新しい会話として続けます。', buttons: [
+    { label: '分岐する', value: 'ok', cls: 'primary' }, { label: 'キャンセル', value: null },
+  ] });
+  if (r !== 'ok') return;
+  const src = current;
+  const c = {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    title: `${src.title}（分岐）`, titled: true, created: Date.now(), updated: Date.now(),
+    model: src.model, think: src.think, system: src.system,
+    messages: structuredClone(src.messages.slice(0, i + 1)),
+  };
+  // 最後の回答から分けた時は送る中身が元と同じなので、キャッシュの残り時間も引き継ぐ
+  if (i === src.messages.length - 1 && src.cache) c.cache = { ...src.cache };
+  await saveConv(c);
+  current = c;
+  renderChat();
+  renderDrawer();
+  toast('分岐しました');
 }
 
 function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } }

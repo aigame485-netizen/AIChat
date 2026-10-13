@@ -93,6 +93,8 @@ function renderChat() {
   chat.scrollTop = chat.scrollHeight;
 }
 
+const COPY_ICON = '<svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+
 function userEl(m) {
   const el = document.createElement('div');
   el.className = 'msg user';
@@ -113,6 +115,11 @@ function userEl(m) {
     bub.className = 'bubble';
     bub.textContent = text;
     el.appendChild(bub);
+    const acts = document.createElement('div');
+    acts.className = 'msg-actions';
+    acts.innerHTML = `<button data-act="copy" aria-label="コピー">${COPY_ICON}</button>`;
+    acts.firstChild.onclick = () => navigator.clipboard.writeText(text).then(() => toast('コピーしました'));
+    el.appendChild(acts);
   }
   return el;
 }
@@ -171,7 +178,7 @@ function fillAssistant(el, content, streaming, meta = {}) {
   if (!streaming) {
     if (meta.stop === 'max_tokens') html += '<div class="note">長くなりすぎたため、途中で終わっています。</div>';
     if (meta.aborted) html += '<div class="note">中断しました。</div>';
-    html += `<div class="msg-actions"><button data-act="copy" aria-label="コピー"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>`;
+    html += `<div class="msg-actions"><button data-act="copy" aria-label="コピー">${COPY_ICON}</button>`;
     if (meta.role === 'assistant') html += `<button data-act="branch" aria-label="ここから分岐"><svg viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="7" r="2"/><path d="M6 7v10M18 9c0 5-12 3-12 8"/></svg></button>`;
     html += '</div>';
   }

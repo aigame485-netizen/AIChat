@@ -118,6 +118,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .msg-actions button { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 8px; color: var(--muted); }
 .msg-actions button:active { background: var(--bg-hover); }
 .msg-actions svg { width: 18px; height: 18px; }
+.msg.user .msg-actions { margin-top: 2px; }
 .note { color: var(--muted); font-size: 13px; margin-top: 6px; }
 .error-box { border: 1px solid var(--danger); color: var(--danger); border-radius: 12px; padding: 10px 14px; font-size: 14px; margin: 12px 0; }
 

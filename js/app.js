@@ -1,10 +1,12 @@
-// 画面・会話管理
+// 画面・会話管理。編集所の本文タブは editor.js
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import * as db from './db.js';
 import { decryptText } from './crypto.js';
 import { MODELS, modelById } from './pricing.js';
 import { buildParams, streamChat, cleanForHistory, generateTitle, friendlyError } from './api.js';
+import * as editor from './editor.js';
+import { TOOL_NAMES } from './tools.js';
 
 const $ = (id) => document.getElementById(id);
 const THINKS = { none: 'なし', low: '短', medium: '中', high: '長' };
@@ -15,15 +17,24 @@ const K_CIPHER = 'ui_pref_a';
 const K_PASS = 'ui_pref_b';
 
 // ---------- 状態 ----------
-let settings = { systemPrompt: '', defModel: 'sonnet', defThink: 'medium', theme: 'auto', yenRate: 150, budget: 100 };
-let convs = [];          // 全会話（更新日時の新しい順）
+let settings = {
+  systemPrompt: '', defModel: 'sonnet', defThink: 'medium',
+  editSystemPrompt: '', editModel: 'opus', editThink: 'medium',
+  theme: 'auto', yenRate: 150, budget: 100,
+};
+let convs = [];          // 全会話（更新日時の新しい順。チャットと編集所の両方）
 let current = null;      // 表示中の会話。未保存の新規会話もここに入る
+let lastCurrent = { chat: null, edit: null }; // モードを行き来した時に戻る会話
+let mode = 'chat';       // 'chat' | 'edit'
+let tab = 'editor';      // 編集所の下タブ 'editor' | 'chat'
 let selModel = 'sonnet'; // 未保存の新規会話用のモデル・思考
 let selThink = 'medium';
 let searchOn = false;
 let attachments = [];    // { media_type, data }
 let busy = false;
 let abortCtrl = null;
+let wakeLock = null;
+let backupWarned = false;
 
 marked.setOptions({ gfm: true, breaks: true });
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
@@ -32,6 +43,10 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
 const md = (text) => DOMPurify.sanitize(marked.parse(text || ''));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+const roomOf = (c) => c.room || 'chat';
+const visibleConvs = () => convs.filter((c) => roomOf(c) === mode);
+const isEditConv = (c) => roomOf(c) === 'edit';
+
 // ---------- 起動 ----------
 init();
 
@@ -39,22 +54,94 @@ async function init() {
   db.requestPersist();
   const saved = await db.kvGet('settings');
   if (saved) settings = { ...settings, ...saved };
-  selModel = settings.defModel;
-  selThink = settings.defThink;
   convs = ((await db.convAll()) || []).sort((a, b) => b.updated - a.updated);
   applyTheme(settings.theme);
   bindUI();
-  newConversation();
+  await editor.initEditor({
+    toast, dialog, esc,
+    sendQuote,
+    showEditorTab: () => showTab('editor'),
+    onPendingChange: updateBadge,
+    onEditorFileChange: () => {},
+    backup: () => editor.makeBackup(convs, settings),
+    restore: (file) => editor.restoreBackup(file, importConvs, applyImportedSettings),
+  });
+  const lastMode = (await db.kvGet('lastMode')) || 'chat';
+  setMode(lastMode === 'edit' ? 'edit' : 'chat', true);
   setInterval(updateCacheTimer, 1000);
   updateOnline();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
+// ---------- モードとタブ ----------
+function setMode(m, initial = false) {
+  if (!initial) { lastCurrent[mode] = current; editor.flushSave(); }
+  mode = m;
+  db.kvSet('lastMode', m);
+  $('segMode').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === m)));
+  $('tabbar').hidden = m !== 'edit';
+  $('emptyText').textContent = m === 'edit' ? '本文について相談したり、直してもらったりできます' : 'なんでも聞いてください';
+  const back = lastCurrent[m];
+  if (back && convs.includes(back)) openConversation(back.id);
+  else newConversation();
+  showTab(m === 'edit' ? (initial ? 'editor' : tab) : 'chat');
+  closeDrawer();
+  if (m === 'edit' && !backupWarned) {
+    backupWarned = true;
+    editor.backupIsOld().then((old) => { if (old) toast('バックアップが7日以上前です。⋮ メニューから保存できます'); });
+  }
+}
+
+function showTab(t) {
+  tab = t;
+  const inEditor = mode === 'edit' && t === 'editor';
+  if (!inEditor) editor.flushSave();
+  $('editorPane').hidden = !inEditor;
+  $('chat').hidden = inEditor;
+  $('composer').hidden = inEditor;
+  $('composer').classList.toggle('in-editor', mode === 'edit');
+  $('convTitle').hidden = inEditor;
+  $('btnSettings').hidden = inEditor;
+  $('btnFile').hidden = !inEditor;
+  $('btnEditorMenu').hidden = !inEditor;
+  $('tabEditor').setAttribute('aria-pressed', String(inEditor));
+  $('tabChat').setAttribute('aria-pressed', String(!inEditor));
+  if (!inEditor) toBottom();
+}
+
+function updateBadge(n) {
+  $('tabBadge').hidden = !n;
+  $('tabBadge').textContent = n;
+}
+
+// 本文の選択範囲を引用として入力欄へ
+function sendQuote(text) {
+  showTab('chat');
+  const inp = $('input');
+  inp.value = (inp.value ? inp.value.replace(/\s*$/, '\n\n') : '') + text;
+  autoGrow();
+  inp.focus();
+  inp.setSelectionRange(inp.value.length, inp.value.length);
+}
+
+async function keepAwake(on) {
+  try {
+    if (on) { if (!wakeLock && navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); }
+    else if (wakeLock) { await wakeLock.release(); wakeLock = null; }
+  } catch { /* 非対応・拒否は無視 */ }
+}
+
 // ---------- 会話の切り替え ----------
+function defaults() {
+  return mode === 'edit' ? { model: settings.editModel, think: settings.editThink, system: settings.editSystemPrompt }
+    : { model: settings.defModel, think: settings.defThink, system: settings.systemPrompt };
+}
+
 function newConversation() {
   current = null;
-  selModel = settings.defModel;
-  selThink = settings.defThink;
+  const d = defaults();
+  selModel = d.model;
+  selThink = d.think;
   renderChat();
   closeDrawer();
 }
@@ -83,9 +170,28 @@ function renderChat() {
   chat.querySelectorAll('.msg, .error-box').forEach((el) => el.remove());
   const msgs = current ? current.messages : [];
   $('empty').hidden = msgs.length > 0;
-  for (const m of msgs) {
-    if (m.role === 'user') chat.appendChild(userEl(m));
-    else if (m.role === 'assistant') chat.appendChild(assistantEl(m, false));
+  // ツールの往復（assistant → tool_result → assistant …）は1つの回答として描く
+  let i = 0;
+  while (i < msgs.length) {
+    const m = msgs[i];
+    if (m.role === 'user' && !m.tool) { chat.appendChild(userEl(m)); i++; continue; }
+    if (m.role === 'assistant') {
+      const content = [...m.content];
+      let last = m;
+      i++;
+      while (i < msgs.length && msgs[i].role === 'user' && msgs[i].tool) {
+        content.push(...msgs[i].content);
+        i++;
+        if (i < msgs.length && msgs[i].role === 'assistant') { content.push(...msgs[i].content); last = msgs[i]; i++; }
+        else break;
+      }
+      const el = document.createElement('div');
+      el.className = 'msg assistant';
+      fillAssistant(el, content, false, last);
+      chat.appendChild(el);
+      continue;
+    }
+    i++; // system など
   }
   $('convTitle').textContent = current ? current.title : '新しい会話';
   updateModelChip();
@@ -131,6 +237,30 @@ function assistantEl(m, streaming) {
   return el;
 }
 
+// 編集所のツール呼び出しをカードにする
+function toolCard(b, waiting, errored) {
+  const inp = b.input || {};
+  const file = esc(inp.file || '');
+  const tail = errored ? '（失敗）' : '';
+  const cls = 'tool-card' + (waiting ? ' pulse' : '') + (errored ? ' err' : '');
+  switch (b.name) {
+    case 'read': return `<div class="${cls}">📖 ${file || 'ファイル'}${waiting ? ' を読んでいます…' : ' を読みました' + tail}</div>`;
+    case 'grep': return `<div class="${cls}">🔍 「${esc(inp.pattern || '')}」${waiting ? ' を探しています…' : ' を検索' + tail}</div>`;
+    case 'list': return `<div class="${cls}">📋 ファイル一覧${tail}</div>`;
+    case 'edit': {
+      const n = `<span class="n">${(inp.old_string || '').length}字 → ${(inp.new_string || '').length}字</span>`;
+      if (waiting) return `<div class="${cls}">✎ ${file || 'ファイル'} を編集しています…</div>`;
+      if (errored) return `<div class="${cls}">✎ ${file} を編集（失敗）</div>`;
+      return `<button class="${cls} link" data-jump="${file}" data-text="${esc(inp.new_string || '')}">✎ ${file} を編集 ${n}</button>`;
+    }
+    case 'write':
+      if (waiting) return `<div class="${cls}">＋ ${file || 'ファイル'} を作っています…</div>`;
+      if (errored) return `<div class="${cls}">＋ ${file} を作成（失敗）</div>`;
+      return `<button class="${cls} link" data-jump="${file}" data-text="">＋ ${file} を作成（${(inp.content || '').length}字）</button>`;
+  }
+  return `<div class="${cls}">${esc(b.name)}${tail}</div>`;
+}
+
 // content ブロック列を描画する。ストリーミング中も同じ関数で毎フレーム描き直す
 function fillAssistant(el, content, streaming, meta = {}) {
   const openThinks = [...el.querySelectorAll('details.think')].map((d) => d.open);
@@ -139,6 +269,7 @@ function fillAssistant(el, content, streaming, meta = {}) {
   const sources = new Map();
   const searchHits = [];
   const resultIds = new Set(content.filter((b) => b.tool_use_id).map((b) => b.tool_use_id));
+  const errIds = new Set(content.filter((b) => b.type === 'tool_result' && b.is_error).map((b) => b.tool_use_id));
   const flush = () => { if (textBuf) { html += `<div class="md">${md(textBuf)}</div>`; textBuf = ''; } };
   let thinkIdx = 0;
   content.forEach((b, i) => {
@@ -164,6 +295,8 @@ function fillAssistant(el, content, streaming, meta = {}) {
     } else if (b.type === 'web_search_tool_result') {
       if (Array.isArray(b.content)) searchHits.push(...b.content.filter((r) => r.url));
       else html += '<div class="status">検索できませんでした</div>';
+    } else if (b.type === 'tool_use' && TOOL_NAMES.has(b.name)) {
+      html += toolCard(b, !resultIds.has(b.id), errIds.has(b.id));
     } else if (b.type === 'fallback') {
       html += '<div class="note">安全上の理由で、別のモデルが回答を引き継ぎました。</div>';
     }
@@ -177,6 +310,7 @@ function fillAssistant(el, content, streaming, meta = {}) {
   }
   if (!streaming) {
     if (meta.stop === 'max_tokens') html += '<div class="note">長くなりすぎたため、途中で終わっています。</div>';
+    if (meta.limitHit) html += '<div class="note">ツールの使用回数が上限に達したため、ここで止めました。続きを頼むと再開します。</div>';
     if (meta.aborted) html += '<div class="note">中断しました。</div>';
     html += `<div class="msg-actions"><button data-act="copy" aria-label="コピー">${COPY_ICON}</button>`;
     if (meta.role === 'assistant') html += `<button data-act="branch" aria-label="ここから分岐"><svg viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="7" r="2"/><path d="M6 7v10M18 9c0 5-12 3-12 8"/></svg></button>`;
@@ -192,6 +326,9 @@ function fillAssistant(el, content, streaming, meta = {}) {
   }
   const branchBtn = el.querySelector('[data-act="branch"]');
   if (branchBtn) branchBtn.onclick = () => branchFrom(meta);
+  el.querySelectorAll('[data-jump]').forEach((btn) => {
+    btn.onclick = () => { if (!busy) editor.jumpTo(btn.dataset.jump, btn.dataset.text); };
+  });
 }
 
 // この回答までのやりとりを写した新しい会話を作る。元の会話はそのまま残る
@@ -207,7 +344,8 @@ async function branchFrom(m) {
   const c = {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     title: `${src.title}（分岐）`, titled: true, created: Date.now(), updated: Date.now(),
-    model: src.model, think: src.think, system: src.system,
+    model: src.model, think: src.think, system: src.system, room: roomOf(src),
+    readFiles: [...(src.readFiles || [])],
     messages: structuredClone(src.messages.slice(0, i + 1)),
   };
   // 最後の回答から分けた時は送る中身が元と同じなので、キャッシュの残り時間も引き継ぐ
@@ -246,6 +384,17 @@ function todayNote() {
   return `今日の日付は${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日（${w}）です。`;
 }
 
+// 履歴を API に送る形にする。user が続く時（ツール結果の直後に質問）は1つにまとめる
+function toApiMessages(msgs) {
+  const out = [];
+  for (const m of msgs) {
+    const prev = out[out.length - 1];
+    if (prev && prev.role === 'user' && m.role === 'user') prev.content = [...prev.content, ...m.content];
+    else out.push({ role: m.role, content: m.content });
+  }
+  return out;
+}
+
 async function send() {
   if (busy) return;
   const text = $('input').value.trim();
@@ -254,13 +403,15 @@ async function send() {
   if (!apiKey) { toast('先に設定でAPIキーを登録してください'); openSettings(); return; }
 
   if (!current) {
+    const d = defaults();
     current = {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       title: '新しい会話', titled: false, created: Date.now(), updated: Date.now(),
-      model: selModel, think: selThink, system: settings.systemPrompt, messages: [],
+      model: selModel, think: selThink, system: d.system, room: mode, messages: [],
     };
   }
   const conv = current;
+  const inEdit = isEditConv(conv);
   const sentImages = attachments;
   const content = sentImages.map((a) => ({ type: 'image', source: { type: 'base64', media_type: a.media_type, data: a.data } }));
   if (text) content.push({ type: 'text', text });
@@ -285,58 +436,90 @@ async function send() {
 
   setBusy(true);
   abortCtrl = new AbortController();
+  if (inEdit) { await editor.flushSave(); editor.beginToolTurn(); editor.setEditorLocked(true); keepAwake(true); }
   const params = buildParams({
-    modelKey: conv.model, think: conv.think, search: searchOn, system: conv.system,
-    messages: conv.messages.map((m) => ({ role: m.role, content: m.content })),
+    modelKey: conv.model, think: conv.think, search: searchOn,
+    system: inEdit ? [conv.system, ...editor.systemExtras()] : conv.system,
+    messages: toApiMessages(conv.messages),
+    tools: inEdit ? editor.toolDefs() : null,
   });
   const cacheKey = { model: conv.model, think: conv.think, search: searchOn };
-  let lastContent = [];
+  const readFiles = new Set(conv.readFiles || []);
   let lastSnap = null;
+  let shownContent = [];
+  let costAdded = 0;
+  let rounds = 0;
   let raf = 0;
+  const draw = (c, snap) => {
+    shownContent = c; lastSnap = snap;
+    if (raf) return;
+    raf = requestAnimationFrame(() => {
+      raf = 0;
+      if (current !== conv) return;
+      const stick = nearBottom();
+      fillAssistant(aEl, shownContent, true);
+      if (stick) toBottom();
+    });
+  };
   try {
     const res = await streamChat({
       apiKey, params, signal: abortCtrl.signal,
-      onUpdate: (c, snap) => {
-        lastContent = c; lastSnap = snap;
-        if (raf) return;
-        raf = requestAnimationFrame(() => {
-          raf = 0;
-          if (current !== conv) return;
-          const stick = nearBottom();
-          fillAssistant(aEl, lastContent, true);
-          if (stick) toBottom();
-        });
+      onUpdate: draw,
+      runTool: inEdit ? (name, input) => editor.runTool(name, input, { readFiles, convId: conv.id }) : null,
+      onRound: async ({ assistant, results, cost, servedModel }) => {
+        rounds++;
+        conv.messages.push({ role: 'assistant', content: assistant, at: Date.now(), model: servedModel, cost, tool: true });
+        conv.messages.push({ role: 'user', content: results, at: Date.now(), tool: true });
+        conv.readFiles = [...readFiles];
+        await addCost(cost, servedModel);
+        costAdded += cost;
+        await saveConv(conv);
       },
     });
     cancelAnimationFrame(raf);
-    await addCost(res.cost, res.servedModel);
+    await addCost(res.cost - costAdded, res.servedModel);
     if (res.stopReason === 'refusal') {
-      rollback(conv, added, text, sentImages);
-      if (current === conv) { renderChat(); showError('この内容には答えられませんでした（安全上の理由）。言い方を変えて送ってみてください。'); }
+      if (rounds) { showError('この内容には答えられませんでした（安全上の理由）。'); }
+      else {
+        rollback(conv, added, text, sentImages);
+        if (current === conv) { renderChat(); showError('この内容には答えられませんでした（安全上の理由）。言い方を変えて送ってみてください。'); }
+      }
       return;
     }
-    const entry = { role: 'assistant', content: cleanForHistory(res.content), at: Date.now(), model: res.servedModel, cost: res.cost, stop: res.stopReason };
+    const entry = { role: 'assistant', content: cleanForHistory(res.content), at: Date.now(), model: res.servedModel, cost: res.cost - costAdded, stop: res.stopReason, limitHit: res.limitHit || undefined };
     conv.messages.push(entry);
+    if (res.limitHit) {
+      // 往復の上限で止めた時は、未実行の tool_use に結果を補って履歴を壊さない
+      const results = entry.content.filter((b) => b.type === 'tool_use').map((b) =>
+        ({ type: 'tool_result', tool_use_id: b.id, content: 'ツールの使用回数が上限に達したため実行していません。', is_error: true }));
+      if (results.length) conv.messages.push({ role: 'user', content: results, at: Date.now(), tool: true });
+    }
+    conv.readFiles = [...readFiles];
     conv.cache = { at: res.startedAt, ...cacheKey };
     await saveConv(conv);
-    if (current === conv) { fillAssistant(aEl, entry.content, false, entry); updateCacheTimer(); }
+    if (current === conv) { renderChat(); updateCacheTimer(); }
     if (!conv.titled) makeTitle(conv, apiKey, text, entry);
   } catch (err) {
     cancelAnimationFrame(raf);
     const msg = friendlyError(err);
     if (msg === 'aborted') {
-      // 中断: 途中までの文章だけ残す。文章がまだ無ければ送信自体を取り消す
+      // 中断: 途中までの文章だけ残す。文章がまだ無ければ送信自体を取り消す（ツールの往復が済んでいればそれは残す）
       if (lastSnap?.usage) await addCost(estimateCost(lastSnap, params.model), params.model);
-      const partial = lastContent.filter((b) => b.type === 'text' && b.text).map((b) => ({ type: 'text', text: b.text }));
+      const partial = (lastSnap?.content || []).filter((b) => b.type === 'text' && b.text).map((b) => ({ type: 'text', text: b.text }));
       if (partial.length) {
         const entry = { role: 'assistant', content: partial, at: Date.now(), model: params.model, aborted: true };
         conv.messages.push(entry);
         await saveConv(conv);
-        if (current === conv) fillAssistant(aEl, entry.content, false, entry);
+        if (current === conv) renderChat();
+      } else if (rounds) {
+        if (current === conv) renderChat();
+        toast('中断しました');
       } else {
         rollback(conv, added, text, sentImages);
         if (current === conv) renderChat();
       }
+    } else if (rounds) {
+      if (current === conv) { renderChat(); showError(msg); }
     } else {
       rollback(conv, added, text, sentImages);
       if (current === conv) { renderChat(); showError(msg); }
@@ -345,6 +528,7 @@ async function send() {
     apiKey = null;
     abortCtrl = null;
     setBusy(false);
+    if (inEdit) { editor.setEditorLocked(false); keepAwake(false); }
   }
 }
 
@@ -416,7 +600,7 @@ function periodLabel(key) {
 }
 
 async function addCost(usd, modelId) {
-  if (!usd) return;
+  if (!usd || usd <= 0) return;
   const stat = (await db.kvGet('stat')) || { periods: {} };
   const key = periodKey();
   const p = stat.periods[key] || (stat.periods[key] = { total: 0, models: {} });
@@ -497,7 +681,7 @@ function renderDrawer() {
   const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const groupOf = (t) => t >= startToday ? '今日' : t >= startToday - 864e5 ? '昨日' : t >= startToday - 7 * 864e5 ? '7日以内' : 'それ以前';
   let html = '', lastGroup = '';
-  for (const c of convs) {
+  for (const c of visibleConvs()) {
     const g = groupOf(c.updated);
     if (g !== lastGroup) { html += `<div class="conv-group">${g}</div>`; lastGroup = g; }
     html += `<button class="conv-item${current === c ? ' active' : ''}" data-id="${c.id}">${esc(c.title)}</button>`;
@@ -541,12 +725,18 @@ async function renameConv(c) {
 }
 
 // ---------- 設定 ----------
+const modelOptions = () => Object.entries(MODELS).map(([k, m]) => `<option value="${k}">${m.label}（${m.note}）</option>`).join('');
+const thinkOptions = () => Object.entries(THINKS).map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
+
 async function openSettings() {
   $('systemPrompt').value = settings.systemPrompt;
-  $('defModel').innerHTML = Object.entries(MODELS).map(([k, m]) => `<option value="${k}">${m.label}（${m.note}）</option>`).join('');
+  $('editSystemPrompt').value = settings.editSystemPrompt;
+  for (const id of ['defModel', 'editModel']) $(id).innerHTML = modelOptions();
+  for (const id of ['defThink', 'editThink']) $(id).innerHTML = thinkOptions();
   $('defModel').value = settings.defModel;
-  $('defThink').innerHTML = Object.entries(THINKS).map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
   $('defThink').value = settings.defThink;
+  $('editModel').value = settings.editModel;
+  $('editThink').value = settings.editThink;
   $('yenRate').value = settings.yenRate;
   $('budget').value = settings.budget;
   renderThemeSeg();
@@ -555,9 +745,17 @@ async function openSettings() {
   const has = (await db.kvGet(K_CIPHER)) && (await db.kvGet(K_PASS));
   $('keyStatus').textContent = has ? '登録済み（変更するときだけ入力）' : '未登録';
   await renderCost();
+  renderBackupInfo();
   $('settings').classList.add('open');
 }
 function closeSettings() { $('settings').classList.remove('open'); }
+
+async function renderBackupInfo() {
+  $('backupInfo').textContent = await editor.lastBackupText();
+  const est = await db.storageEstimate();
+  const mb = (n) => (n / 1048576).toFixed(1) + 'MB';
+  $('storageInfo').textContent = est ? `端末内の使用量: ${mb(est.usage || 0)}（上限の目安 ${est.quota >= 1073741824 ? (est.quota / 1073741824).toFixed(1) + 'GB' : mb(est.quota || 0)}）` : '';
+}
 
 async function saveSettings() { await db.kvSet('settings', settings); }
 
@@ -597,36 +795,29 @@ async function clearKey() {
   toast('削除しました');
 }
 
-async function exportHistory() {
-  const data = { app: 'AIChat', format: 1, exportedAt: new Date().toISOString(), conversations: convs };
-  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
-  const a = document.createElement('a');
-  const d = new Date();
-  a.href = URL.createObjectURL(blob);
-  a.download = `AIChat_${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}.json`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+// バックアップの会話を取り込む（同じIDは新しい方を残す）。戻り値は取り込んだ件数
+async function importConvs(list) {
+  let n = 0;
+  for (const c of list) {
+    if (!c.id || !Array.isArray(c.messages)) continue;
+    const old = convs.find((x) => x.id === c.id);
+    if (old && old.updated >= c.updated) continue;
+    await db.convPut(c);
+    convs = convs.filter((x) => x.id !== c.id);
+    convs.push(c);
+    n++;
+  }
+  convs.sort((a, b) => b.updated - a.updated);
+  renderDrawer();
+  return n;
 }
 
-async function importHistory(file) {
-  try {
-    const data = JSON.parse(await file.text());
-    if (data.app !== 'AIChat' || !Array.isArray(data.conversations)) throw new Error('形式が違います');
-    let n = 0;
-    for (const c of data.conversations) {
-      if (!c.id || !Array.isArray(c.messages)) continue;
-      const old = convs.find((x) => x.id === c.id);
-      if (old && old.updated >= c.updated) continue;
-      await db.convPut(c);
-      convs = convs.filter((x) => x.id !== c.id);
-      convs.push(c);
-      n++;
-    }
-    convs.sort((a, b) => b.updated - a.updated);
-    toast(`${n}件の会話を読み込みました`);
-  } catch (e) {
-    toast('読み込めませんでした: ' + e.message);
-  }
+async function applyImportedSettings(s) {
+  const keys = ['systemPrompt', 'editSystemPrompt', 'defModel', 'defThink', 'editModel', 'editThink', 'theme', 'yenRate', 'budget'];
+  for (const k of keys) if (s[k] !== undefined && s[k] !== null) settings[k] = s[k];
+  await saveSettings();
+  applyTheme(settings.theme);
+  if ($('settings').classList.contains('open')) openSettings();
 }
 
 // ---------- 写真添付 ----------
@@ -704,10 +895,13 @@ function updateOnline() { $('offline').hidden = navigator.onLine; }
 function bindUI() {
   $('btnMenu').onclick = openDrawer;
   $('drawerScrim').onclick = closeDrawer;
-  $('btnNew').onclick = () => { if (!busy) newConversation(); };
+  $('btnNew').onclick = () => { if (!busy) { newConversation(); if (mode === 'edit') showTab('chat'); } };
   $('btnSettings').onclick = openSettings;
   $('btnSettingsClose').onclick = closeSettings;
   $('convTitle').onclick = () => { if (current?.messages.length) renameConv(current); };
+  $('segMode').onclick = (e) => { const b = e.target.closest('button'); if (b && !busy && b.dataset.v !== mode) setMode(b.dataset.v); };
+  $('tabEditor').onclick = () => showTab('editor');
+  $('tabChat').onclick = () => showTab('chat');
 
   // 会話一覧: タップで開く、長押し（Androidでは contextmenu が出る）で操作メニュー
   let pressTimer = 0, pressed = false, startXY = null;
@@ -716,7 +910,7 @@ function bindUI() {
     const item = e.target.closest('.conv-item');
     if (!item) return;
     if (pressed) { pressed = false; return; }
-    if (!busy) openConversation(item.dataset.id);
+    if (!busy) { openConversation(item.dataset.id); if (mode === 'edit') showTab('chat'); }
   });
   list.addEventListener('contextmenu', (e) => {
     const item = e.target.closest('.conv-item');
@@ -772,16 +966,14 @@ function bindUI() {
   $('btnKeySave').onclick = saveKey;
   $('btnKeyClear').onclick = clearKey;
   $('systemPrompt').onchange = () => { settings.systemPrompt = $('systemPrompt').value; saveSettings(); };
-  $('defModel').onchange = () => {
-    settings.defModel = $('defModel').value;
-    if (settings.defModel === 'opus' && settings.defThink === 'none') { settings.defThink = 'low'; $('defThink').value = 'low'; }
-    saveSettings();
+  $('editSystemPrompt').onchange = () => { settings.editSystemPrompt = $('editSystemPrompt').value; saveSettings(); };
+  const bindModelThink = (mId, tId, mKey, tKey) => {
+    const fix = () => { if (settings[mKey] === 'opus' && settings[tKey] === 'none') { settings[tKey] = 'low'; $(tId).value = 'low'; } };
+    $(mId).onchange = () => { settings[mKey] = $(mId).value; fix(); saveSettings(); };
+    $(tId).onchange = () => { settings[tKey] = $(tId).value; fix(); saveSettings(); };
   };
-  $('defThink').onchange = () => {
-    settings.defThink = $('defThink').value;
-    if (settings.defModel === 'opus' && settings.defThink === 'none') { settings.defThink = 'low'; $('defThink').value = 'low'; }
-    saveSettings();
-  };
+  bindModelThink('defModel', 'defThink', 'defModel', 'defThink');
+  bindModelThink('editModel', 'editThink', 'editModel', 'editThink');
   $('segTheme').onclick = (e) => {
     const b = e.target.closest('button');
     if (!b) return;
@@ -792,9 +984,8 @@ function bindUI() {
   };
   $('yenRate').onchange = () => { const v = Number($('yenRate').value); if (v > 0) { settings.yenRate = v; saveSettings(); renderCost(); } };
   $('budget').onchange = () => { const v = Number($('budget').value); if (v > 0) { settings.budget = v; saveSettings(); renderCost(); } };
-  $('btnExport').onclick = exportHistory;
-  $('btnImport').onclick = () => $('importFile').click();
-  $('importFile').onchange = (e) => { const f = e.target.files[0]; if (f) importHistory(f); e.target.value = ''; };
+  $('btnBackup').onclick = async () => { await editor.makeBackup(convs, settings); renderBackupInfo(); };
+  $('btnRestore').onclick = () => $('restoreFile').click();
 
   // 端末のテーマが変わった時（自動のとき）にバーの色を合わせる
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applyTheme(settings.theme));

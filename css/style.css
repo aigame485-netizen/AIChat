@@ -249,3 +249,78 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
   background: var(--accent); color: var(--accent-text); padding: 8px 16px; border-radius: 999px;
   font-size: 14px; z-index: 40; max-width: calc(100% - 32px); text-align: center;
 }
+
+/* ===== 編集所 ===== */
+.mode-seg { margin: 0 4px 8px; }
+.file-chip { flex: 1; min-width: 0; justify-content: center; margin: 0 4px; height: 36px; }
+.file-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.editor { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.editor .empty { padding: 0 16px; }
+.center-row { justify-content: center; margin-top: 8px; }
+.editor textarea {
+  flex: 1; width: 100%; border: 0; outline: 0; resize: none; background: var(--bg);
+  padding: 8px 16px; line-height: 1.9; font-size: 16px;
+}
+.editor textarea:read-only { color: var(--muted); }
+.editor-status { display: flex; align-items: center; gap: 8px; padding: 4px 12px; font-size: 13px; min-height: 42px; }
+.editor-status .chip { height: 32px; font-size: 13px; background: var(--on-bg); border-color: transparent; color: var(--on); }
+.editor-lock { font-size: 13px; color: var(--warn); padding: 4px 16px; }
+.pending-bar {
+  display: flex; align-items: center; gap: 6px; margin: 4px 12px; padding: 8px 14px;
+  background: var(--on-bg); color: var(--on); border-radius: 12px; font-size: 14px; text-align: left;
+}
+.pending-bar .muted { color: var(--on); opacity: .7; font-size: 12px; }
+
+.tabbar {
+  display: flex; flex: none; border-top: 1px solid var(--line); background: var(--bg);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.tabbar button { flex: 1; padding: 10px 0 8px; font-size: 14px; color: var(--muted); display: flex; align-items: center; justify-content: center; gap: 6px; }
+.tabbar button[aria-pressed="true"] { color: var(--text); font-weight: 600; }
+.badge { min-width: 18px; height: 18px; border-radius: 9px; background: var(--on); color: #fff; font-size: 11px; line-height: 18px; padding: 0 5px; font-weight: 600; }
+.composer.in-editor { padding-bottom: 8px; }
+
+/* ファイル一覧シート */
+.file-list { max-height: 55vh; overflow-y: auto; margin: 4px 0; }
+.file-dir { font-size: 12px; color: var(--muted); padding: 10px 12px 2px; }
+.file-item { display: flex; align-items: center; width: 100%; text-align: left; padding: 10px 12px; border-radius: 10px; gap: 8px; }
+.file-item span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-item span.indent { padding-left: 14px; }
+.file-item small { color: var(--muted); font-size: 12px; flex: none; }
+.file-item.active { background: var(--bg-soft); font-weight: 600; }
+.file-item:active { background: var(--bg-hover); }
+
+/* 変更の確認シート */
+.review-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0 10px; }
+.review-head b { font-size: 15px; }
+.review-diff { max-height: 45vh; overflow-y: auto; font-size: 15px; line-height: 1.8; display: flex; flex-direction: column; gap: 6px; }
+.review-btns { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
+.review-btns .btn { padding: 8px 12px; font-size: 14px; }
+.review-btns .btn.primary { flex: 1; }
+.review-btns .btn.danger { color: var(--danger); }
+.review-btns .icon-btn { width: 36px; height: 36px; }
+.review-btns .icon-btn:disabled { opacity: .3; }
+
+/* 差分の色 */
+.d-del, .d-add, .d-same, .d-skip { white-space: pre-wrap; word-break: break-word; padding: 4px 10px; border-radius: 8px; }
+.d-del { background: rgba(220, 38, 38, .10); color: var(--text); }
+.d-add { background: rgba(22, 163, 74, .12); color: var(--text); }
+.d-del mark { background: rgba(220, 38, 38, .35); color: inherit; text-decoration: line-through; }
+.d-add mark { background: rgba(22, 163, 74, .4); color: inherit; }
+.d-same { color: var(--muted); }
+.d-skip { color: var(--muted); font-size: 12px; text-align: center; }
+
+/* 版履歴 */
+.version-item { background: var(--bg-soft); border-radius: 14px; padding: 12px 14px; margin-top: 10px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.version-item .btn { padding: 6px 14px; font-size: 13px; }
+.version-diff { display: flex; flex-direction: column; gap: 4px; font-size: 14px; line-height: 1.7; max-height: 50vh; overflow-y: auto; }
+
+/* 会話タブのツールカード */
+.tool-card {
+  display: inline-flex; align-items: center; gap: 6px; margin: 4px 6px 4px 0;
+  background: var(--bg-soft); border-radius: 10px; padding: 4px 10px; font-size: 13px; color: var(--muted);
+  max-width: 100%; text-align: left;
+}
+.tool-card.err { color: var(--danger); }
+.tool-card.link { color: var(--on); background: var(--on-bg); cursor: pointer; }
+.tool-card .n { font-variant-numeric: tabular-nums; }

@@ -1,6 +1,6 @@
 // 最小限の Service Worker
 // 同じサイトのファイルはネット優先・失敗したらキャッシュ。APIやCDNには関わらない
-const CACHE = 'aichat-v1';
+const CACHE = 'aichat-v2';
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => {

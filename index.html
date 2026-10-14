@@ -16,44 +16,74 @@
     if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
   })();
 </script>
-<link rel="stylesheet" href="css/style.css?v=20261013">
+<link rel="stylesheet" href="css/style.css?v=20261014">
 <script type="importmap">
 {
   "imports": {
     "@anthropic-ai/sdk": "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.128.0/+esm",
     "marked": "https://cdn.jsdelivr.net/npm/marked@12.0.2/+esm",
     "dompurify": "https://cdn.jsdelivr.net/npm/dompurify@3.1.6/+esm",
-    "./js/app.js": "./js/app.js?v=20261013",
-    "./js/api.js": "./js/api.js?v=20261013",
-    "./js/db.js": "./js/db.js?v=20261013",
-    "./js/crypto.js": "./js/crypto.js?v=20261013",
-    "./js/pricing.js": "./js/pricing.js?v=20261013"
+    "diff": "https://cdn.jsdelivr.net/npm/diff@7.0.0/+esm",
+    "./js/app.js": "./js/app.js?v=20261014",
+    "./js/api.js": "./js/api.js?v=20261014",
+    "./js/db.js": "./js/db.js?v=20261014",
+    "./js/crypto.js": "./js/crypto.js?v=20261014",
+    "./js/pricing.js": "./js/pricing.js?v=20261014",
+    "./js/editor.js": "./js/editor.js?v=20261014",
+    "./js/tools.js": "./js/tools.js?v=20261014"
   }
 }
 </script>
-<script type="module" src="js/app.js?v=20261013"></script>
+<script type="module" src="js/app.js?v=20261014"></script>
 </head>
 <body>
 <div id="app">
   <header class="topbar">
-    <button class="icon-btn" id="btnMenu" aria-label="会話一覧">
+    <button class="icon-btn" id="btnMenu" aria-label="メニュー">
       <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
     </button>
     <div class="title" id="convTitle">新しい会話</div>
+    <button class="chip file-chip" id="btnFile" hidden><span id="fileName">ファイルなし</span><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
     <button class="icon-btn" id="btnSettings" aria-label="設定">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+    <button class="icon-btn" id="btnEditorMenu" aria-label="ファイルのメニュー" hidden>
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg>
     </button>
   </header>
   <div class="offline" id="offline" hidden>接続なし</div>
 
+  <!-- 編集所・本文タブ -->
+  <section class="editor" id="editorPane" hidden>
+    <button class="pending-bar" id="pendingBar" hidden>Claudeの変更 <b id="pendingCount">0</b>件 <span class="muted">タップして確認</span><span class="spacer"></span>›</button>
+    <div class="editor-lock" id="editorLock" hidden>Claudeが作業中です。終わるまで本文は編集できません</div>
+    <div class="empty" id="editorEmpty">
+      <div class="empty-logo">✎</div>
+      <div>文章を置く場所です</div>
+      <div class="row center-row">
+        <button class="btn" id="btnEmptyNew">新しいファイル</button>
+        <button class="btn" id="btnEmptyPaste">貼り付けて作る</button>
+        <button class="btn" id="btnEmptyImport">取り込み</button>
+      </div>
+    </div>
+    <textarea id="editorText" spellcheck="false" placeholder="ここに本文を書きます"></textarea>
+    <div class="editor-status" id="editorStatus" hidden>
+      <span class="muted" id="charCount">0字</span>
+      <span class="spacer"></span>
+      <button class="chip" id="btnQuote" hidden>選択した文を会話に送る</button>
+    </div>
+    <input type="file" id="importTxt" accept=".txt,.md,text/plain,text/markdown" multiple hidden>
+    <input type="file" id="restoreFile" accept="application/json,.json" hidden>
+  </section>
+
   <main class="chat" id="chat">
     <div class="empty" id="empty">
       <div class="empty-logo">✳</div>
-      <div>なんでも聞いてください</div>
+      <div id="emptyText">なんでも聞いてください</div>
     </div>
   </main>
 
-  <footer class="composer">
+  <footer class="composer" id="composer">
     <div class="tools">
       <button class="chip" id="btnModel"><span id="modelLabel">Sonnet</span><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
       <button class="chip toggle" id="btnSearch" aria-pressed="false" title="Web検索">
@@ -75,11 +105,21 @@
       </button>
     </div>
   </footer>
+
+  <!-- 編集所の下タブ -->
+  <nav class="tabbar" id="tabbar" hidden>
+    <button id="tabEditor" aria-pressed="true">本文</button>
+    <button id="tabChat" aria-pressed="false">会話<span class="badge" id="tabBadge" hidden>0</span></button>
+  </nav>
 </div>
 
-<!-- 会話一覧（左から出る） -->
+<!-- メニュー（左から出る） -->
 <div class="scrim" id="drawerScrim" hidden></div>
 <nav class="drawer" id="drawer" aria-hidden="true">
+  <div class="seg mode-seg" id="segMode">
+    <button data-v="chat" aria-pressed="true">チャット</button>
+    <button data-v="edit" aria-pressed="false">編集所</button>
+  </div>
   <button class="new-conv" id="btnNew">
     <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新しい会話
   </button>
@@ -97,6 +137,44 @@
   <div class="seg" id="segThink"></div>
   <div class="sheet-note" id="thinkNote"></div>
 </div>
+
+<!-- ファイル一覧シート -->
+<div class="scrim" id="fileSheetScrim" hidden></div>
+<div class="sheet" id="fileSheet" aria-hidden="true">
+  <div class="sheet-grip"></div>
+  <div class="file-list" id="fileList"></div>
+  <button class="new-conv" id="btnFileNew"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新しいファイル</button>
+</div>
+
+<!-- 変更の確認シート -->
+<div class="scrim" id="reviewScrim" hidden></div>
+<div class="sheet review" id="reviewSheet" aria-hidden="true">
+  <div class="sheet-grip"></div>
+  <div class="review-head">
+    <div><b id="reviewTitle"></b><div class="muted small" id="reviewSub"></div></div>
+    <button class="chip" id="btnReviewJump">該当箇所へ</button>
+  </div>
+  <div class="review-diff" id="reviewDiff"></div>
+  <div class="review-btns">
+    <button class="icon-btn" id="btnReviewPrev" aria-label="前へ"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+    <button class="btn danger" id="btnReviewRevert">差し戻し</button>
+    <button class="btn primary" id="btnReviewAccept">反映</button>
+    <button class="btn" id="btnReviewAcceptAll">全て反映</button>
+    <button class="icon-btn" id="btnReviewNext" aria-label="次へ"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+  </div>
+</div>
+
+<!-- 版履歴 -->
+<section class="page" id="versions" aria-hidden="true">
+  <header class="topbar">
+    <button class="icon-btn" id="btnVersionsClose" aria-label="戻る">
+      <svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
+    </button>
+    <div class="title" id="versionsTitle">版履歴</div>
+    <span class="icon-btn"></span>
+  </header>
+  <div class="page-body" id="versionList"></div>
+</section>
 
 <!-- 設定 -->
 <section class="page" id="settings" aria-hidden="true">
@@ -128,16 +206,20 @@
       </div>
     </div>
 
-    <h2>システムプロンプト</h2>
+    <h2>チャット</h2>
     <div class="card">
-      <textarea id="systemPrompt" rows="5" placeholder="例: やさしい口調で、要点を短く答えてください。"></textarea>
+      <label>システムプロンプト<textarea id="systemPrompt" rows="4" placeholder="例: やさしい口調で、要点を短く答えてください。"></textarea></label>
+      <label>モデル<select id="defModel"></select></label>
+      <label>思考<select id="defThink"></select></label>
       <div class="muted small">新しく始めた会話から反映されます。</div>
     </div>
 
-    <h2>新しい会話の初期設定</h2>
+    <h2>編集所</h2>
     <div class="card">
-      <label>モデル<select id="defModel"></select></label>
-      <label>思考<select id="defThink"></select></label>
+      <label>システムプロンプト（編集所）<textarea id="editSystemPrompt" rows="5" placeholder="例: 私は小説を書いています。会話を始めたら、まず「設定/登場人物」を読んでください。文体は変えず、誤字と不自然な言い回しだけ直してください。"></textarea></label>
+      <label>モデル<select id="editModel"></select></label>
+      <label>思考<select id="editThink"></select></label>
+      <div class="muted small">毎回読ませたいファイルがあれば、ここに「◯◯を必ず読む」と書きます。</div>
     </div>
 
     <h2>表示</h2>
@@ -148,16 +230,17 @@
       <label>月の上限＝$<input id="budget" type="number" inputmode="decimal" min="1" step="1"></label>
     </div>
 
-    <h2>履歴</h2>
+    <h2>バックアップ</h2>
     <div class="card">
       <div class="row">
-        <button class="btn" id="btnExport">書き出し</button>
-        <button class="btn" id="btnImport">読み込み</button>
-        <input type="file" id="importFile" accept="application/json,.json" hidden>
+        <button class="btn primary" id="btnBackup">バックアップを保存</button>
+        <button class="btn" id="btnRestore">復元</button>
       </div>
-      <div class="muted small">書き出したファイルを読み込むと、同じ会話は新しい方で上書きされます。</div>
+      <div class="muted small" id="backupInfo"></div>
+      <div class="muted small">会話・編集所のファイル・版・設定をまとめて1つのファイルにして、端末のダウンロードに保存します。ブラウザのデータを消すと中身も消えるので、ときどき保存してください。</div>
+      <div class="muted small" id="storageInfo"></div>
     </div>
-    <div class="muted small center">AIChat v20261011</div>
+    <div class="muted small center">AIChat v20261014</div>
   </div>
 </section>
 

@@ -26,6 +26,16 @@ function thinkingFor(modelKey, think) {
 export function buildParams({ modelKey, think, search, system, messages, tools }) {
   const m = MODELS[modelKey];
   const t = thinkingFor(modelKey, think);
+  const betas = [];
+  const adaptive = t.thinking.type === 'adaptive';
+  // 思考ブロックは system・tools・過去の履歴に紐づく。食い違った時に 400 にせず、その思考ブロックを捨てて続ける
+  // （adaptive 以外では block_binding を付けられないので、過去ターンの思考ブロックを送らない）
+  if (adaptive) {
+    t.thinking.block_binding = { prefix_mismatch_behavior: 'drop_block' };
+    betas.push('thinking-binding-controls-2026-08-01');
+  } else {
+    messages = stripThinking(messages);
+  }
   const p = {
     model: m.id,
     max_tokens: MAX_TOKENS,
@@ -49,9 +59,19 @@ export function buildParams({ modelKey, think, search, system, messages, tools }
   // 安全分類器で断られた時に別モデルで答え直す（Opus/Sonnet のみ。between_tools とは併用しない）
   if (modelKey !== 'haiku' && t.thinking.type !== 'between_tools') {
     p.fallbacks = 'default';
-    p.betas = ['server-side-fallback-2026-07-01'];
+    betas.push('server-side-fallback-2026-07-01');
   }
+  if (betas.length) p.betas = betas;
   return p;
+}
+
+// 過去ターンの thinking ブロックを外す（履歴の形は変えない）
+function stripThinking(messages) {
+  return messages.map((m) => {
+    if (m.role !== 'assistant' || !Array.isArray(m.content)) return m;
+    const content = m.content.filter((b) => b.type !== 'thinking' && b.type !== 'redacted_thinking');
+    return content.length ? { ...m, content } : m;
+  });
 }
 
 // ストリーミングで1ターン送る。onUpdate(shown, snap, cost) が描画用に何度も呼ばれる

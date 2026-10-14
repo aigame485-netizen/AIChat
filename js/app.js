@@ -345,6 +345,7 @@ async function branchFrom(m) {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     title: `${src.title}（分岐）`, titled: true, created: Date.now(), updated: Date.now(),
     model: src.model, think: src.think, system: src.system, room: roomOf(src),
+    rules: src.rules, dateNote: src.dateNote, fileList: src.fileList,
     readFiles: [...(src.readFiles || [])],
     messages: structuredClone(src.messages.slice(0, i + 1)),
   };
@@ -408,6 +409,8 @@ async function send() {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       title: '新しい会話', titled: false, created: Date.now(), updated: Date.now(),
       model: selModel, think: selThink, system: d.system, room: mode, messages: [],
+      // 編集所の約束事は会話ごとに固定（system を変えると思考ブロックが無効になる）
+      ...(mode === 'edit' ? { rules: editor.rulesText() } : {}),
     };
   }
   const conv = current;
@@ -416,10 +419,15 @@ async function send() {
   const content = sentImages.map((a) => ({ type: 'image', source: { type: 'base64', media_type: a.media_type, data: a.data } }));
   if (text) content.push({ type: 'text', text });
   const added = [{ role: 'user', content, at: Date.now() }];
-  // 日付が変わったら会話の途中に system メッセージで知らせる（履歴を書き換えずに済む）
+  // 日付とファイル一覧は、変わった時だけ会話の途中に system メッセージで知らせる（system や履歴を書き換えずに済む）
+  const notes = [];
   const note = todayNote();
-  const lastNote = [...conv.messages].reverse().find((m) => m.role === 'system');
-  if (!lastNote || lastNote.content !== note) added.push({ role: 'system', content: note });
+  if (conv.dateNote !== note) { notes.push(note); conv.dateNote = note; }
+  if (inEdit) {
+    const list = editor.fileListNote();
+    if (conv.fileList !== list) { notes.push(list); conv.fileList = list; }
+  }
+  if (notes.length) added.push({ role: 'system', content: notes.join('\n\n') });
   conv.messages.push(...added);
 
   $('input').value = '';
@@ -439,7 +447,7 @@ async function send() {
   if (inEdit) { await editor.flushSave(); editor.beginToolTurn(); editor.setEditorLocked(true); keepAwake(true); }
   const params = buildParams({
     modelKey: conv.model, think: conv.think, search: searchOn,
-    system: inEdit ? [conv.system, ...editor.systemExtras()] : conv.system,
+    system: inEdit ? [conv.system, conv.rules || editor.rulesText()] : conv.system,
     messages: toApiMessages(conv.messages),
     tools: inEdit ? editor.toolDefs() : null,
   });

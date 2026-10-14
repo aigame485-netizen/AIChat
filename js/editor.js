@@ -417,9 +417,13 @@ export async function runTool(name, input, { readFiles, convId }) {
 export function toolDefs() { return TOOL_DEFS; }
 
 // 編集所の会話に付けるシステムプロンプト（固定文とファイル一覧）
-export function systemExtras() {
+// 約束事は会話作成時に写して固定する（system を変えると思考ブロックが無効になるため）
+export function rulesText() { return TOOL_RULES; }
+
+// ファイル一覧は system ではなく会話途中の system メッセージとして送る（変わった時だけ）
+export function fileListNote() {
   const list = sortedNames().map((n) => files.get(n));
-  return [TOOL_RULES, '## ファイル一覧\n' + fileListText(list)];
+  return '## ファイル一覧\n' + fileListText(list) + '\n（一覧は変わった時にここで更新します。最新は list で確認できます）';
 }
 
 // ---------- 変更の確認（反映／差し戻し） ----------

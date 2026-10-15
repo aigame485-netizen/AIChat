@@ -162,7 +162,7 @@ export function friendlyError(err) {
   if (err instanceof Anthropic.APIConnectionError) return '通信できませんでした。電波の良いところで、もう一度送ってください。';
   if (err instanceof Anthropic.APIError) {
     const raw = err.error?.error?.message || err.message || '';
-    if (/credit balance/i.test(raw)) return '今月のAPIクレジットを使い切りました。毎月15日の更新後にまた使えます。';
+    if (/credit balance/i.test(raw)) return '今月のAPIクレジットを使い切りました。毎月17日の更新後にまた使えます。';
     if (err.status === 401) return 'APIキーが使えません。設定のAPIキーを確認してください。';
     if (err.status === 403) return 'このAPIキーでは使えない操作です。（' + raw + '）';
     if (err.status === 429) return '短時間に使いすぎたため一時的に止まっています。1分ほど待ってから送ってください。';

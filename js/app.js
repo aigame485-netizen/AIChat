@@ -595,16 +595,16 @@ function updateSendEnabled() {
   $('btnSend').disabled = !busy && !$('input').value.trim() && !attachments.length;
 }
 
-// ---------- 利用額の集計（毎月15日で区切る） ----------
+// ---------- 利用額の集計（毎月17日で区切る） ----------
 function periodKey(d = new Date()) {
   let y = d.getFullYear(), m = d.getMonth() + 1;
-  if (d.getDate() < 15) { m -= 1; if (m === 0) { m = 12; y -= 1; } }
+  if (d.getDate() < 17) { m -= 1; if (m === 0) { m = 12; y -= 1; } }
   return `${y}-${String(m).padStart(2, '0')}`;
 }
 function periodLabel(key) {
   const [y, m] = key.split('-').map(Number);
   const nm = m === 12 ? 1 : m + 1;
-  return `${m}/15〜${nm}/14`;
+  return `${m}/17〜${nm}/16`;
 }
 
 async function addCost(usd, modelId) {
